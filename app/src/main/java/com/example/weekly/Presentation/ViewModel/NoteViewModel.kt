@@ -2,67 +2,144 @@ package com.example.weekly.Presentation.ViewModel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.weekly.Data.Settings.SettingsManager
+import com.example.weekly.Domain.Usecase.GroupUseCases.DeleteGroupUseCase
+import com.example.weekly.Domain.Usecase.GroupUseCases.GetAllGroupsUseCase
+import com.example.weekly.Domain.Usecase.GroupUseCases.SaveGroupUseCase
+import com.example.weekly.Domain.Usecase.ThemeUseCase.GetThemeUseCase
+import com.example.weekly.Domain.Usecase.ThemeUseCase.ToggleThemeUseCase
 import com.example.weekly.Domain.Model.Note
 import com.example.weekly.Domain.Usecase.NoteUseCases.DeleteUseCase
 import com.example.weekly.Domain.Usecase.NoteUseCases.GetOrderedNotesUseCase
 import com.example.weekly.Domain.Usecase.NoteUseCases.SaveNoteUseCase
 import com.example.weekly.Domain.Usecase.NoteUseCases.ToggleDoneStatusUseCase
-import kotlinx.coroutines.flow.SharingStarted
+import com.example.weekly.Presentation.State.DayListUiState
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
+import java.time.LocalDate
 import java.time.LocalTime
+import java.time.temporal.TemporalAdjusters
 
-/**
- * ViewModel для работы с заметками/делами и настройками темы.
- *
- * ⭐️ Добавлен SettingsManager для управления темой через DataStore
- */
 class NoteViewModel(
-    getOrderedNotesUseCase: GetOrderedNotesUseCase,
+    private val getOrderedNotesUseCase: GetOrderedNotesUseCase,
+    private val getThemeUseCase: GetThemeUseCase,
     private val deleteUseCase: DeleteUseCase,
     private val saveNoteUseCase: SaveNoteUseCase,
     private val toggleDoneStatusUseCase: ToggleDoneStatusUseCase,
-    private val settingsManager: SettingsManager    // Менеджер настроек для работы с темой
+    private val toggleThemeUseCase: ToggleThemeUseCase,
+    private val getAllGroupsUseCase: GetAllGroupsUseCase,
+    private val saveGroupUseCase: SaveGroupUseCase,
+    private val deleteGroupUseCase: DeleteGroupUseCase
 ) : ViewModel() {
 
-    // ⭐️ StateFlow для наблюдения за темой (темная/светлая)
-    val isDarkTheme: StateFlow<Boolean> = settingsManager.isDarkTheme.stateIn(
-        scope = viewModelScope,                     // Используем viewModelScope для корректного lifecycle
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = false                        // По умолчанию светлая тема
-    )
+    // Внутренний MutableStateFlow
+    private val _uiState = MutableStateFlow(DayListUiState())
+    
+    // Публичный StateFlow для UI
+    val uiState: StateFlow<DayListUiState> = _uiState.asStateFlow()
 
-    // ⭐️ StateFlow для заметок, сгруппированных по дню и отсортированных
-    val notesGroupedByDay: StateFlow<Map<String, List<Note>>> = getOrderedNotesUseCase()
-        .stateIn(
-            started = SharingStarted.WhileSubscribed(5000),
-            scope = viewModelScope,
-            initialValue = emptyMap()
-        )
+    init {
+        loadInitialData()
+    }
 
+    private fun loadInitialData() {
+        viewModelScope.launch {
+            // Объединяем три потока: заметки, тема, и группы
+            combine(
+                getOrderedNotesUseCase(),
+                getThemeUseCase(),
+                getAllGroupsUseCase()
+            ) { allNotes, isDark, groups ->
+                // Фильтруем заметки по выбранной группе
+                val filteredNotes = if (_uiState.value.selectedGroupId == null) {
+                    allNotes // Показываем все
+                } else {
+                    allNotes.mapValues { (_, notes) ->
+                        notes.filter { it.groupId == _uiState.value.selectedGroupId }
+                    }.filterValues { it.isNotEmpty() }
+                }
+                
+                _uiState.value.copy(
+                    notes = filteredNotes,
+                    isDarkTheme = isDark,
+                    groups = groups,
+                    isLoading = false
+                )
+            }.collect { newState ->
+                _uiState.update { newState }
+            }
+        }
+        
+        updateWeekDates(LocalDate.now())
+    }
 
-    // ⭐️ Функция для переключения темы
+    // Логика переключения недель
+    fun onNextWeekClick() {
+        val newStart = _uiState.value.currentWeekStart.plusWeeks(1)
+        updateWeekDates(newStart)
+    }
+
+    fun onPreviousWeekClick() {
+        val newStart = _uiState.value.currentWeekStart.minusWeeks(1)
+        updateWeekDates(newStart)
+    }
+
+    private fun updateWeekDates(startDate: LocalDate) {
+        val startOfWeek = startDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val days = (0L..6L).map { startOfWeek.plusDays(it) }
+        
+        _uiState.update { it.copy(
+            currentWeekStart = startOfWeek,
+            weekDates = days
+        )}
+    }
+
+    // Выбор группы для фильтрации
+    fun onGroupSelected(groupId: Int?) {
+        _uiState.update { it.copy(selectedGroupId = groupId) }
+        // Перезагружаем данные с новым фильтром
+        loadInitialData()
+    }
+
+    // Функция для переключения темы
     fun toggleTheme(isDark: Boolean) {
         viewModelScope.launch {
-            settingsManager.toggleTheme(isDark)
+            toggleThemeUseCase(isDark)
         }
     }
 
-    // ⭐️ Удаление заметки
+    // Удаление заметки
     fun deleteNote(note: Note) = viewModelScope.launch {
         deleteUseCase(note)
     }
 
-    // ⭐️ Переключение статуса "выполнено/не выполнено"
+    // Переключение статуса "выполнено/не выполнено"
     fun toggleDoneStatus(note: Note) = viewModelScope.launch {
         toggleDoneStatusUseCase(note)
     }
 
-    // ⭐️ Сохранение новой или редактирование существующей заметки
-    fun saveNote(id: Int, date: String, content: String, startTime: LocalTime?) =
-        viewModelScope.launch {
-            saveNoteUseCase(id, date, content, startTime)
-        }
+    // Сохранение новой или редактирование существующей заметки
+    fun saveNote(
+        id: Int, 
+        date: String, 
+        content: String, 
+        startTime: LocalTime?,
+        groupId: Int? = null
+    ) = viewModelScope.launch {
+        saveNoteUseCase(id, date, content, startTime, groupId)
+    }
+    
+    // Сохранение группы
+    fun saveGroup(id: Int = 0, name: String, color: String) = viewModelScope.launch {
+        saveGroupUseCase(id, name, color)
+    }
+    
+    // Удаление группы
+    fun deleteGroup(groupId: Int) = viewModelScope.launch {
+        deleteGroupUseCase(groupId)
+    }
 }
