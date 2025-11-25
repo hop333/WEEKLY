@@ -1,4 +1,4 @@
-package com.example.weekly
+package com.example.weekly.Presentation
 
 import android.os.Build
 import android.os.Bundle
@@ -19,10 +19,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.example.weekly.data.NoteViewModel
-import com.example.weekly.data.NoteViewModelFactory
-import com.example.weekly.data.WeeklyApplication
-import com.example.weekly.ui.theme.WEEKLYTheme
+import com.example.weekly.Presentation.ViewModel.NoteViewModel
+import com.example.weekly.Data.WeeklyApplication
+import com.example.weekly.Presentation.Screen.DayDetailScreen
+import com.example.weekly.Presentation.Screen.DayListScreen
+import com.example.weekly.Presentation.Screen.Screen
+import com.example.weekly.Presentation.theme.WEEKLYTheme
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -49,11 +51,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val application = application as WeeklyApplication
-
-        val noteViewModelFactory = NoteViewModelFactory(
-            repository = application.repository,
-            settingsManager = application.settingsManager
-        )
+        val noteViewModelFactory = application.container.noteViewModelFactory
 
         setContent {
             val navController = rememberNavController()
