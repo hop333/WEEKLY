@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.weekly.Domain.Usecase.GroupUseCases.DeleteGroupUseCase
 import com.example.weekly.Domain.Usecase.GroupUseCases.GetAllGroupsUseCase
 import com.example.weekly.Domain.Usecase.GroupUseCases.SaveGroupUseCase
+import com.example.weekly.Domain.Usecase.HolidayUseCases.GetHolidaysForWeekUseCase
 import com.example.weekly.Domain.Usecase.ThemeUseCase.GetThemeUseCase
 import com.example.weekly.Domain.Usecase.ThemeUseCase.ToggleThemeUseCase
 import com.example.weekly.Domain.Model.Note
@@ -12,6 +13,8 @@ import com.example.weekly.Domain.Usecase.NoteUseCases.DeleteUseCase
 import com.example.weekly.Domain.Usecase.NoteUseCases.GetOrderedNotesUseCase
 import com.example.weekly.Domain.Usecase.NoteUseCases.SaveNoteUseCase
 import com.example.weekly.Domain.Usecase.NoteUseCases.ToggleDoneStatusUseCase
+import com.example.weekly.Domain.Usecase.NotificationUseCases.CancelNotificationUseCase
+import com.example.weekly.Domain.Usecase.NotificationUseCases.ScheduleNotificationUseCase
 import com.example.weekly.Presentation.State.DayListUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,15 +28,27 @@ import java.time.LocalTime
 import java.time.temporal.TemporalAdjusters
 
 class NoteViewModel(
+    // Заметки
     private val getOrderedNotesUseCase: GetOrderedNotesUseCase,
-    private val getThemeUseCase: GetThemeUseCase,
     private val deleteUseCase: DeleteUseCase,
     private val saveNoteUseCase: SaveNoteUseCase,
     private val toggleDoneStatusUseCase: ToggleDoneStatusUseCase,
+
+    // Тема
+    private val getThemeUseCase: GetThemeUseCase,
     private val toggleThemeUseCase: ToggleThemeUseCase,
+
+    // Группы
     private val getAllGroupsUseCase: GetAllGroupsUseCase,
     private val saveGroupUseCase: SaveGroupUseCase,
-    private val deleteGroupUseCase: DeleteGroupUseCase
+    private val deleteGroupUseCase: DeleteGroupUseCase,
+
+    // Уведомления
+    private val scheduleNotificationUseCase: ScheduleNotificationUseCase,
+    private val cancelNotificationUseCase: CancelNotificationUseCase,
+
+    // Праздники
+    private val getHolidaysForWeekUseCase: GetHolidaysForWeekUseCase
 ) : ViewModel() {
 
     // Внутренний MutableStateFlow
@@ -96,6 +111,22 @@ class NoteViewModel(
             currentWeekStart = startOfWeek,
             weekDates = days
         )}
+        
+        // Загружаем праздники для новой недели
+        loadHolidays(startOfWeek)
+    }
+
+    // Загрузка праздников для текущей недели
+    private fun loadHolidays(weekStart: LocalDate) {
+        viewModelScope.launch {
+            try {
+                val holidays = getHolidaysForWeekUseCase(weekStart)
+                _uiState.update { it.copy(holidays = holidays) }
+            } catch (e: Exception) {
+                // При ошибке просто не показываем праздники
+                _uiState.update { it.copy(holidays = emptyMap()) }
+            }
+        }
     }
 
     // Выбор группы для фильтрации
@@ -114,11 +145,17 @@ class NoteViewModel(
 
     // Удаление заметки
     fun deleteNote(note: Note) = viewModelScope.launch {
+        // Отменяем уведомление при удалении
+        cancelNotificationUseCase(note.id)
         deleteUseCase(note)
     }
 
     // Переключение статуса "выполнено/не выполнено"
     fun toggleDoneStatus(note: Note) = viewModelScope.launch {
+        // Если задача выполнена - отменяем уведомление
+        if (!note.isDone) {
+            cancelNotificationUseCase(note.id)
+        }
         toggleDoneStatusUseCase(note)
     }
 
@@ -131,6 +168,19 @@ class NoteViewModel(
         groupId: Int? = null
     ) = viewModelScope.launch {
         saveNoteUseCase(id, date, content, startTime, groupId)
+        
+        // Планируем уведомление если есть время
+        if (startTime != null) {
+            val note = Note(
+                id = id,
+                content = content,
+                date = date,
+                isDone = false,
+                startTime = startTime,
+                groupId = groupId
+            )
+            scheduleNotificationUseCase(note)
+        }
     }
     
     // Сохранение группы
